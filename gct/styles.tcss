@@ -1,0 +1,113 @@
+/* Google Calendar TUI Styles */
+
+Screen {
+    background: #1a1b26;
+    color: #c0caf5;
+}
+
+#sidebar {
+    width: 30;
+    background: #24283b;
+    border-right: solid #414868;
+    padding: 1;
+}
+
+#main-content {
+    padding: 1;
+}
+
+#header-info {
+    height: 3;
+    content-align: center middle;
+    background: #414868;
+    color: #c0caf5;
+    margin-bottom: 1;
+    text-style: bold;
+}
+
+.calendar-grid {
+    layout: grid;
+    grid-size: 7 6;
+    grid-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
+    grid-rows: 1fr 1fr 1fr 1fr 1fr 1fr;
+    border: solid #414868;
+}
+
+CalendarDay {
+    border: solid #414868;
+    padding: 1;
+    align: center middle;
+}
+
+CalendarDay:hover {
+    background: #2ac3de 15%;
+}
+
+CalendarDay .event-dot {
+    color: #ff9e64;
+    text-style: bold;
+}
+
+#weather-panel {
+    height: auto;
+    min-height: 10;
+    background: #24283b;
+    border: solid #bb9af7;
+    margin-top: 1;
+    padding: 1;
+}
+
+#event-detail {
+    background: #1f2335;
+    border: solid #7aa2f7;
+    padding: 1;
+    margin-top: 1;
+}
+
+/* Custom Button Styles (Menu Items) */
+Button {
+    width: 100%;
+    margin-bottom: 0;
+    height: 3;
+    background: transparent;
+    border: none;
+    color: #9aa5ce;
+    text-align: left;
+    padding-left: 2;
+    content-align: left middle;
+}
+
+Button:hover {
+    background: #2ac3de 15%;
+    color: #2ac3de;
+    text-style: bold;
+}
+
+Button.-active {
+    background: #7aa2f7 20%;
+    color: #7aa2f7;
+    text-style: bold;
+    border-left: solid #7aa2f7;
+}
+
+.sidebar-title {
+    color: #565f89;
+    text-style: bold;
+    margin: 1 0 1 2;
+}
+
+#sidebar-upcoming {
+    color: #9aa5ce;
+    padding-left: 2;
+    line-pad: 1;
+}
+
+#day-names {
+    height: 1;
+}
+
+.day-name {
+    text-align: center;
+    text-style: bold;
+    color: #7aa2f7;
+}

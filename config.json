@@ -1,0 +1,21 @@
+{
+  "general": {
+    "default_view": "month",
+    "theme": "dark"
+  },
+  "weather": {
+    "enabled": true,
+    "latitude": 35.6895,
+    "longitude": 139.6917,
+    "location_name": "Tokyo"
+  },
+  "keybindings": {
+    "move_up": "k",
+    "move_down": "j",
+    "move_left": "h",
+    "move_right": "l",
+    "refresh": "r",
+    "add_event": "a",
+    "edit_event": "e"
+  }
+}
