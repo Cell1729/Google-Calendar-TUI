@@ -1,19 +1,26 @@
-/* Google Calendar TUI Styles */
+/* Google Calendar TUI Styles - Robust Layout */
 
 Screen {
     background: #1a1b26;
     color: #c0caf5;
 }
 
+#app-body {
+    height: 1fr;
+    width: 100%;
+}
+
 #sidebar {
     width: 30;
+    height: 100%;
     background: #24283b;
     border-right: solid #414868;
-    padding: 1;
 }
 
 #main-content {
-    padding: 1;
+    width: 1fr;
+    height: 100%;
+    background: #1a1b26;
 }
 
 #header-info {
@@ -21,8 +28,17 @@ Screen {
     content-align: center middle;
     background: #414868;
     color: #c0caf5;
-    margin-bottom: 1;
     text-style: bold;
+}
+
+#view-switcher {
+    height: 1fr;
+    width: 100%;
+}
+
+CalendarWidget, WeekWidget, DayWidget {
+    height: 100%;
+    width: 100%;
 }
 
 .calendar-grid {
@@ -31,59 +47,76 @@ Screen {
     grid-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
     grid-rows: 1fr 1fr 1fr 1fr 1fr 1fr;
     border: solid #414868;
+    height: 1fr;
 }
 
 CalendarDay {
+    background: #1f2335;
     border: solid #414868;
-    padding: 1;
-    align: center middle;
+    height: 1fr;
+    color: #c0caf5;
 }
 
-CalendarDay:hover {
-    background: #2ac3de 15%;
+CalendarDay:focus {
+    background: #7aa2f7 30%;
+    border: double #7aa2f7;
 }
 
-CalendarDay .event-dot {
+#day-num {
+    width: 100%;
+    height: 1;
+    content-align: right top;
+    color: #7aa2f7;
+    padding-right: 1;
+}
+
+#event-dots {
     color: #ff9e64;
     text-style: bold;
+    text-align: center;
 }
 
 #weather-panel {
     height: auto;
-    min-height: 10;
     background: #24283b;
-    border: solid #bb9af7;
-    margin-top: 1;
-    padding: 1;
+    border-top: solid #bb9af7;
+    padding: 0 1;
 }
+
+#weather-content {
+    height: 3;
+    align: left middle;
+}
+
+
 
 #event-detail {
+    height: 10;
     background: #1f2335;
-    border: solid #7aa2f7;
-    padding: 1;
-    margin-top: 1;
+    border-top: solid #7aa2f7;
+    padding: 0 1;
 }
 
-/* Custom Button Styles (Menu Items) */
-Button {
-    width: 100%;
+.panel-title {
+    color: #565f89;
+    text-style: bold;
     margin-bottom: 0;
-    height: 3;
+}
+
+/* Sidebar Button Styles */
+Sidebar Button {
+    margin: 0;
+    width: 100%;
     background: transparent;
     border: none;
-    color: #9aa5ce;
     text-align: left;
-    padding-left: 2;
-    content-align: left middle;
 }
 
-Button:hover {
+Sidebar Button:hover {
     background: #2ac3de 15%;
-    color: #2ac3de;
-    text-style: bold;
 }
 
-Button.-active {
+Sidebar Button.-active {
     background: #7aa2f7 20%;
     color: #7aa2f7;
     text-style: bold;
@@ -93,13 +126,7 @@ Button.-active {
 .sidebar-title {
     color: #565f89;
     text-style: bold;
-    margin: 1 0 1 2;
-}
-
-#sidebar-upcoming {
-    color: #9aa5ce;
-    padding-left: 2;
-    line-pad: 1;
+    margin: 1 0 0 1;
 }
 
 #day-names {
@@ -107,6 +134,7 @@ Button.-active {
 }
 
 .day-name {
+    width: 1fr;
     text-align: center;
     text-style: bold;
     color: #7aa2f7;
