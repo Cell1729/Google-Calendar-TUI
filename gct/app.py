@@ -169,19 +169,7 @@ class GCTApp(App):
         """実際の選択処理 (デバウンス目的でわずかに待機)"""
         await asyncio.sleep(0.05) # 高速移動時はキャンセルされる
 
-        # 1. 予定詳細の更新
-        event_list = self.query_one("#event-list", Label)
-        if message.events:
-            text = ""
-            for ev in message.events:
-                start = ev['start'].get('dateTime', ev['start'].get('date', ''))
-                time_str = start.split('T')[1][:5] if 'T' in start else "All Day"
-                text += f"󰄱 {time_str} - {ev['summary']}\n"
-            event_list.update(text)
-        else:
-            event_list.update("No events for this day")
-
-        # 2. 天気詳細の更新 (1h予報)
+        # 1. 天気詳細の更新 (1h予報)
         if message.date_obj:
             date_key = message.date_obj.isoformat()
             if date_key in self.weather_cache:
@@ -206,18 +194,11 @@ class GCTApp(App):
             with Vertical(id="main-content"):
                 yield Label(f"{now.strftime('%B %Y')}", id="header-info")
                 
-                # ビューの切り替え用
+                # ビューの切り替え用 (メイン)
                 with ContentSwitcher(initial="view-month", id="view-switcher"):
                     yield CalendarWidget(now.year, now.month, id="view-month")
                     yield WeekWidget(id="view-week")
                     yield DayWidget(id="view-day")
-
-                yield WeatherWidget(id="weather-panel")
-                
-                # 詳細パネル
-                with Vertical(id="event-detail"):
-                    yield Label("Event Details", classes="panel-title")
-                    yield Label("Select a day to see events", id="event-list")
 
         yield Footer()
 

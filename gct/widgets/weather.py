@@ -23,7 +23,7 @@ class WeatherWidget(Vertical):
         text = "Hourly: "
         for i in range(0, len(times), 4):
             time_str = times[i].split('T')[1]
-            text += f"[bold]{time_str}[/bold]: {temps[i]}°  "
+            text += f"\n[bold]{time_str}[/bold]: {temps[i]}° \n "
         
         self.query_one("#weather-hourly", Static).update(text)
 

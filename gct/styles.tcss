@@ -1,4 +1,4 @@
-/* Google Calendar TUI Styles - Robust Layout */
+/* Google Calendar TUI Styles - Renewed Layout */
 
 Screen {
     background: #1a1b26;
@@ -32,7 +32,7 @@ Screen {
 }
 
 #view-switcher {
-    height: 1fr;
+    height: 1fr; /* カレンダーが優先的に広がる */
     width: 100%;
 }
 
@@ -45,7 +45,7 @@ CalendarWidget, WeekWidget, DayWidget {
     layout: grid;
     grid-size: 7 6;
     grid-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr;
-    grid-rows: 1fr 1fr 1fr 1fr 1fr 1fr;
+    grid-rows: 1fr 1fr 1fr 1fr 1fr 1fr; /* 高さを均等に固定 */
     border: solid #414868;
     height: 1fr;
 }
@@ -55,10 +55,11 @@ CalendarDay {
     border: solid #414868;
     height: 1fr;
     color: #c0caf5;
+    padding: 0 1;
 }
 
 CalendarDay:focus {
-    background: #7aa2f7 30%;
+    background: #7aa2f7 20%;
     border: double #7aa2f7;
 }
 
@@ -67,20 +68,25 @@ CalendarDay:focus {
     height: 1;
     content-align: right top;
     color: #7aa2f7;
-    padding-right: 1;
+    text-style: bold;
 }
 
-#event-dots {
-    color: #ff9e64;
-    text-style: bold;
-    text-align: center;
+#cell-event-list {
+    width: 100%;
+    height: 1fr;
+    color: #9aa5ce;
+    overflow: hidden;
+}
+
+CalendarDay:focus #cell-event-list {
+    color: white;
 }
 
 #weather-panel {
     height: auto;
-    background: #24283b;
-    border-top: solid #bb9af7;
-    padding: 0 1;
+    background: transparent;
+    padding: 0 2;
+    margin-top: 1;
 }
 
 #weather-content {
@@ -88,28 +94,32 @@ CalendarDay:focus {
     align: left middle;
 }
 
+#weather-icon {
+    margin-right: 2;
+    color: #ff9e64;
+    text-style: bold;
+}
 
-
-#event-detail {
-    height: 10;
-    background: #1f2335;
-    border-top: solid #7aa2f7;
-    padding: 0 1;
+#weather-temp {
+    text-style: bold;
+    color: #f7768e;
 }
 
 .panel-title {
     color: #565f89;
     text-style: bold;
-    margin-bottom: 0;
+    margin: 1 0 0 0;
 }
 
 /* Sidebar Button Styles */
 Sidebar Button {
     margin: 0;
     width: 100%;
+    height: 1; /* 高さを最小化 */
     background: transparent;
     border: none;
     text-align: left;
+    padding-left: 2;
 }
 
 Sidebar Button:hover {
@@ -127,6 +137,16 @@ Sidebar Button.-active {
     color: #565f89;
     text-style: bold;
     margin: 1 0 0 1;
+}
+
+#calendar-container, #upcoming-container {
+    height: auto;
+    padding-left: 2;
+    margin-bottom: 1;
+}
+
+#calendar-list, #sidebar-upcoming {
+    color: #9aa5ce;
 }
 
 #day-names {

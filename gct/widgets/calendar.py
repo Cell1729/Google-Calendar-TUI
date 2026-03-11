@@ -20,16 +20,24 @@ class CalendarDay(Static):
     def compose(self) -> ComposeResult:
         # プレースホルダを作成
         yield Label(str(self.day) if self.day > 0 else "", id="day-num")
-        yield Static("", id="event-dots")
+        yield Label("", id="cell-event-list")
         self.call_after_refresh(self.update_content)
 
     def update_content(self) -> None:
-        """中身を更新 (recompose を避ける)"""
-        dots_widget = self.query_one("#event-dots", Static)
+        """中身を更新 (予定のタイトルを表示)"""
+        list_widget = self.query_one("#cell-event-list", Label)
         if self.events:
-            dots_widget.update("•" * min(len(self.events), 3))
+            event_titles = []
+            for ev in self.events[:3]: # 最大3件
+                summary = ev.get('summary', '(No Title)')
+                # 文字数制限 (セルからはみ出さないよう)
+                if len(summary) > 10:
+                    summary = summary[:9] + "…"
+                event_titles.append(f"•{summary}")
+            
+            list_widget.update("\n".join(event_titles))
         else:
-            dots_widget.update("")
+            list_widget.update("")
 
     def on_focus(self) -> None:
         """フォーカスされたときに親に通知"""
