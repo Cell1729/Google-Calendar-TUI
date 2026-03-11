@@ -18,9 +18,18 @@ class CalendarDay(Static):
         self.date_obj = date_obj
 
     def compose(self) -> ComposeResult:
+        # プレースホルダを作成
         yield Label(str(self.day) if self.day > 0 else "", id="day-num")
+        yield Static("", id="event-dots")
+        self.call_after_refresh(self.update_content)
+
+    def update_content(self) -> None:
+        """中身を更新 (recompose を避ける)"""
+        dots_widget = self.query_one("#event-dots", Static)
         if self.events:
-            yield Static("•" * min(len(self.events), 3), id="event-dots")
+            dots_widget.update("•" * min(len(self.events), 3))
+        else:
+            dots_widget.update("")
 
     def on_focus(self) -> None:
         """フォーカスされたときに親に通知"""
@@ -66,8 +75,10 @@ class CalendarWidget(Vertical):
         elif event.key in ("right", "l"):
             new_idx = curr_idx + 1
         
-        if 0 <= new_idx < len(days):
+        if new_idx != curr_idx and 0 <= new_idx < len(days):
             days[new_idx].focus()
+            event.prevent_default()
+            event.stop()
 
     def compose(self) -> ComposeResult:
         # 七曜ヘッダー
@@ -88,6 +99,10 @@ class CalendarWidget(Vertical):
                     yield CalendarDay(day, is_today=is_today, events=events, date_obj=date_obj)
 
     async def update_events(self, events_by_day):
-        """予定データを更新して再描画"""
+        """現在のウィジェットを更新 (再構築しない)"""
         self.events_cache = events_by_day
-        await self.recompose()
+        days = self.query(CalendarDay)
+        for day_widget in days:
+            if day_widget.day > 0:
+                day_widget.events = self.events_cache.get(day_widget.day, [])
+                day_widget.update_content()

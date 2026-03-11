@@ -2,6 +2,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Static, Label, Button, ContentSwitcher
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
+from textual.command import Provider, Hit, Hits
 from pathlib import Path
 from datetime import datetime, timedelta
 import asyncio
@@ -26,8 +27,8 @@ class GCTApp(App):
     CSS_PATH = "styles.tcss"
 
     BINDINGS = [
-        Binding("q", "quit", "Quit", show=True),
-        Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+q", "quit", "Quit", show=True),
+        Binding("ctrl+p", "command_palette", "Commands", show=True),
         Binding("m", "switch_view('month')", "Month", show=True),
         Binding("w", "switch_view('week')", "Week", show=True),
         Binding("d", "switch_view('day')", "Day", show=True),
@@ -42,6 +43,7 @@ class GCTApp(App):
         self.weather_api = WeatherAPI()
         self.creds = None
         self.config = self.config_manager.load_config()
+        self.weather_cache = {} # 日付(isoformat) -> hourly_data
 
     async def on_mount(self) -> None:
         """起動時の処理"""
@@ -160,14 +162,19 @@ class GCTApp(App):
             self.action_switch_view("day")
 
     async def on_calendar_widget_day_selected(self, message: CalendarWidget.DaySelected) -> None:
-        """カレンダーの日付が選択された時の処理"""
+        """カレンダーの日付が選択された時の処理 (ワーカーで実行してレスポンス改善)"""
+        self.run_worker(self.handle_day_selection(message), exclusive=True, group="selection_update")
+
+    async def handle_day_selection(self, message: CalendarWidget.DaySelected) -> None:
+        """実際の選択処理 (デバウンス目的でわずかに待機)"""
+        await asyncio.sleep(0.05) # 高速移動時はキャンセルされる
+
         # 1. 予定詳細の更新
         event_list = self.query_one("#event-list", Label)
         if message.events:
             text = ""
             for ev in message.events:
-                start = ev['start'].get('dateTime', ev['start'].get('date'))
-                # 時間部分だけ抽出 (ISOフォーマット想定)
+                start = ev['start'].get('dateTime', ev['start'].get('date', ''))
                 time_str = start.split('T')[1][:5] if 'T' in start else "All Day"
                 text += f"󰄱 {time_str} - {ev['summary']}\n"
             event_list.update(text)
@@ -176,16 +183,19 @@ class GCTApp(App):
 
         # 2. 天気詳細の更新 (1h予報)
         if message.date_obj:
+            date_key = message.date_obj.isoformat()
+            if date_key in self.weather_cache:
+                self.query_one(WeatherWidget).update_hourly(self.weather_cache[date_key])
+                return
+
             try:
                 lat = self.config["weather"]["latitude"]
                 lon = self.config["weather"]["longitude"]
-                # 該当日付の1時間ごとの天気を取得
-                hourly_data = await self.weather_api.get_hourly_weather(
-                    lat, lon, message.date_obj.isoformat()
-                )
+                hourly_data = await self.weather_api.get_hourly_weather(lat, lon, date_key)
+                self.weather_cache[date_key] = hourly_data
                 self.query_one(WeatherWidget).update_hourly(hourly_data)
             except Exception as e:
-                self.log(f"Weather detail error: {e}")
+                self.log(f"Weather error: {e}")
 
     def compose(self) -> ComposeResult:
         now = datetime.now()
@@ -227,6 +237,34 @@ class GCTApp(App):
             pass
         
         self.notify(f"Switched to {view} view")
+
+class GCTCommandProvider(Provider):
+    """GCT独自のコマンドパレットプロバイダー"""
+    
+    async def search(self, query: str) -> Hits:
+        """コマンドを検索"""
+        matcher = self.matcher(query)
+        
+        commands = [
+            ("Exit / Quit App", self.app.action_quit, "Exit the application"),
+            ("Switch to Month View", lambda: self.app.action_switch_view("month"), "Show monthly calendar"),
+            ("Switch to Week View", lambda: self.app.action_switch_view("week"), "Show weekly calendar"),
+            ("Switch to Day View", lambda: self.app.action_switch_view("day"), "Show daily schedule"),
+            ("Refresh Data", self.app.refresh_data, "Fetch latest events and weather"),
+        ]
+        
+        for name, action, help_text in commands:
+            score = matcher.match(name)
+            if score > 0:
+                yield Hit(
+                    score,
+                    matcher.highlight(name),
+                    action,
+                    help=help_text
+                )
+
+# App クラスの COMMANDS を更新
+GCTApp.COMMANDS = GCTApp.COMMANDS | {GCTCommandProvider}
 
 if __name__ == "__main__":
     app = GCTApp()
