@@ -8,6 +8,12 @@ from datetime import datetime, date, timedelta
 class EventFormScreen(ModalScreen[dict]):
     """予定の作成・編集用モーダル画面"""
     
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("ctrl+s", "save", "Save"),
+        ("ctrl+d", "delete_event", "Delete"),
+    ]
+    
     CSS = """
     EventFormScreen {
         align: center middle;
@@ -114,12 +120,12 @@ class EventFormScreen(ModalScreen[dict]):
                 yield Input(value=end_val, placeholder="YYYY-MM-DD HH:MM", id="input-end")
                 
             with Horizontal(id="button-row"):
-                yield Button("Cancel", id="btn-cancel", variant="default")
+                yield Button("Cancel (Esc)", id="btn-cancel", variant="default")
                 if self.is_edit_mode:
-                    btn_del = Button("Delete", id="btn-delete")
+                    btn_del = Button("Delete (Ctrl+D)", id="btn-delete")
                     btn_del.styles.display = "block"
                     yield btn_del
-                yield Button("Save", id="btn-save", variant="primary")
+                yield Button("Save (Ctrl+S)", id="btn-save", variant="primary")
 
     def validate_date_input(self, text: str, is_all_day: bool) -> datetime:
         """入力文字列をパースしてdatetimeを返す"""
@@ -134,43 +140,50 @@ class EventFormScreen(ModalScreen[dict]):
         except ValueError:
             return None
 
+    def action_cancel(self) -> None:
+        self.dismiss(None) # キャンセル
+        
+    def action_delete_event(self) -> None:
+        if self.is_edit_mode:
+            self.dismiss({"action": "delete", "event_id": self.event_data.get('id')})
+
+    def action_save(self) -> None:
+        summary = self.query_one("#input-summary", Input).value.strip()
+        if not summary:
+            self.app.notify("Title is required", severity="error")
+            return
+            
+        is_all_day = self.query_one("#input-allday", Checkbox).value
+        start_str = self.query_one("#input-start", Input).value
+        end_str = self.query_one("#input-end", Input).value
+        
+        start_dt = self.validate_date_input(start_str, is_all_day)
+        end_dt = self.validate_date_input(end_str, is_all_day)
+        
+        if not start_dt or not end_dt:
+            self.app.notify("Invalid date/time format", severity="error")
+            return
+            
+        if start_dt > end_dt:
+            self.app.notify("Start must be before End", severity="error")
+            return
+
+        result = {
+            "action": "update" if self.is_edit_mode else "create",
+            "summary": summary,
+            "is_all_day": is_all_day,
+            "start": start_dt,
+            "end": end_dt
+        }
+        if self.is_edit_mode:
+            result["event_id"] = self.event_data.get('id')
+
+        self.dismiss(result)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel":
-            self.dismiss(None) # キャンセル
-            
+            self.action_cancel()
         elif event.button.id == "btn-delete":
-            # 削除を指示して画面を閉じる
-            self.dismiss({"action": "delete", "event_id": self.event_data.get('id')})
-            
+            self.action_delete_event()
         elif event.button.id == "btn-save":
-            summary = self.query_one("#input-summary", Input).value.strip()
-            if not summary:
-                self.app.notify("Title is required", severity="error")
-                return
-                
-            is_all_day = self.query_one("#input-allday", Checkbox).value
-            start_str = self.query_one("#input-start", Input).value
-            end_str = self.query_one("#input-end", Input).value
-            
-            start_dt = self.validate_date_input(start_str, is_all_day)
-            end_dt = self.validate_date_input(end_str, is_all_day)
-            
-            if not start_dt or not end_dt:
-                self.app.notify("Invalid date/time format", severity="error")
-                return
-                
-            if start_dt > end_dt:
-                self.app.notify("Start must be before End", severity="error")
-                return
-
-            result = {
-                "action": "update" if self.is_edit_mode else "create",
-                "summary": summary,
-                "is_all_day": is_all_day,
-                "start": start_dt,
-                "end": end_dt
-            }
-            if self.is_edit_mode:
-                result["event_id"] = self.event_data.get('id')
-
-            self.dismiss(result)
+            self.action_save()

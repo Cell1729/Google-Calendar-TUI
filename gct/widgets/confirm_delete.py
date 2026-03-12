@@ -6,6 +6,11 @@ from textual.containers import Vertical, Horizontal
 class ConfirmDeleteScreen(ModalScreen[bool]):
     """削除確認用モーダルダイアログ"""
 
+    BINDINGS = [
+        ("escape", "cancel", "Cancel"),
+        ("enter", "confirm", "Confirm"),
+    ]
+
     CSS = """
     ConfirmDeleteScreen {
         align: center middle;
@@ -45,11 +50,17 @@ class ConfirmDeleteScreen(ModalScreen[bool]):
         with Vertical(id="confirm-container"):
             yield Label("Are you sure you want to delete this event?", id="confirm-message")
             with Horizontal(id="confirm-buttons"):
-                yield Button("Cancel", id="btn-no", variant="default")
-                yield Button("Delete", id="btn-yes", variant="error")
+                yield Button("Cancel (Esc)", id="btn-no", variant="default")
+                yield Button("Delete (Enter)", id="btn-yes", variant="error")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-yes":
-            self.dismiss(True)
+            self.action_confirm()
         else:
-            self.dismiss(False)
+            self.action_cancel()

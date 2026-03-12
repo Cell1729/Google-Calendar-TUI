@@ -1,5 +1,5 @@
 from textual.app import App, ComposeResult
-from textual.widgets import Header, Footer, Static, Label, Button, ContentSwitcher
+from textual.widgets import Header, Footer, Static, Label, Button, ContentSwitcher, Input
 from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual.command import Provider, Hit, Hits
@@ -39,6 +39,8 @@ class GCTApp(App):
         Binding("b", "navigate(-1)", "Prev", show=True),
         Binding("n", "navigate(1)", "Next", show=True),
         Binding("a", "add_event", "Add Event", show=True),
+        Binding("j", "focus_next_item", "Next Item", show=False),
+        Binding("k", "focus_prev_item", "Prev Item", show=False),
     ]
 
     def __init__(self):
@@ -400,6 +402,37 @@ class GCTApp(App):
             self.run_worker(self.refresh_data(self.view_date, fetch_api=True))
         except Exception as e:
             self.notify(f"Delete Error: {str(e)}", severity="error")
+
+    def _get_focusable_items(self):
+        """現在のビュー内のフォーカス可能なアイテム（予定やカレンダー日付）を取得"""
+        current_view = self.query_one(ContentSwitcher).current
+        if current_view in ("view-week", "view-day"):
+            return list(self.query(EventItem))
+        elif current_view == "view-month":
+            return [day for day in self.query(CalendarDay) if getattr(day, 'day', 0) > 0]
+        return []
+
+    def action_focus_next_item(self) -> None:
+        """jキー: 予定やカレンダー間のフォーカス移動 (次へ)"""
+        if isinstance(self.focused, Input): return
+        items = self._get_focusable_items()
+        if not items: return
+        if self.focused in items:
+            idx = items.index(self.focused)
+            items[(idx + 1) % len(items)].focus()
+        else:
+            items[0].focus()
+
+    def action_focus_prev_item(self) -> None:
+        """kキー: 予定やカレンダー間のフォーカス移動 (前へ)"""
+        if isinstance(self.focused, Input): return
+        items = self._get_focusable_items()
+        if not items: return
+        if self.focused in items:
+            idx = items.index(self.focused)
+            items[(idx - 1) % len(items)].focus()
+        else:
+            items[-1].focus()
 
 class GCTCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
