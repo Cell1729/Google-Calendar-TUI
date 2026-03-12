@@ -114,12 +114,20 @@ class GCTApp(App):
             # 4. サイドバーの「Upcoming」更新
             upcoming = self.query_one("#sidebar-upcoming", Label)
             if self.all_events:
-                upcoming_text = ""
-                for ev in self.all_events[:3]:
-                    start = ev['start'].get('dateTime', ev['start'].get('date'))
-                    dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                    upcoming_text += f"[bold]{dt.strftime('%m/%d')}[/bold] {ev['summary']}\n"
-                upcoming.update(upcoming_text)
+                now_utc = datetime.now() # 簡易的に現在時刻と比較
+                upcoming_list = []
+                for ev in self.all_events:
+                    start_str = ev['start'].get('dateTime', ev['start'].get('date'))
+                    # タイムゾーンを考慮した比較のための変換 (簡易版)
+                    dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
+                    # dt が現在(tzなし)に近くなるよう tzinfo を消去して比較
+                    if dt.replace(tzinfo=None) >= now_utc:
+                        time_part = dt.strftime('%H:%M') if 'T' in start_str else "AllDay"
+                        upcoming_list.append(f"[bold]{dt.strftime('%m/%d')} {time_part}[/bold] {ev['summary']}")
+                    if len(upcoming_list) >= 3:
+                        break
+                
+                upcoming.update("\n".join(upcoming_list) if upcoming_list else "No future events")
             else:
                 upcoming.update("No upcoming events")
 
