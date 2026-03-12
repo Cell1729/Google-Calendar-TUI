@@ -116,3 +116,37 @@ class CalendarWidget(Vertical):
             if day_widget.day > 0:
                 day_widget.events = self.events_cache.get(day_widget.day, [])
                 day_widget.update_content()
+
+    async def update_calendar(self, year: int, month: int, events_by_day: dict):
+        """年月自体を更新してカレンダーを描き直す"""
+        self.year = year
+        self.month = month
+        self.events_cache = events_by_day
+        
+        # グリッド内の日付データを一新
+        cal = calendar.monthcalendar(self.year, self.month)
+        today = date.today()
+        
+        # 42個(7x6)のセルを順番に埋める
+        flat_days = [d for week in cal for d in week]
+        # 足りない分を 0 で埋める (最大42セル)
+        flat_days += [0] * (42 - len(flat_days))
+        
+        day_widgets = list(self.query(CalendarDay))
+        for i, day_widget in enumerate(day_widgets):
+            day_val = flat_days[i]
+            day_widget.day = day_val
+            day_widget.is_today = (self.year == today.year and self.month == today.month and day_val == today.day)
+            day_widget.events = self.events_cache.get(day_val, [])
+            day_widget.date_obj = date(self.year, self.month, day_val) if day_val > 0 else None
+            
+            # クラスの更新 (今日の強調など)
+            if day_widget.is_today:
+                day_widget.add_class("today")
+            else:
+                day_widget.remove_class("today")
+            
+            # 表示更新
+            num_label = day_widget.query_one("#day-num", Label)
+            num_label.update(str(day_val) if day_val > 0 else "")
+            day_widget.update_content()

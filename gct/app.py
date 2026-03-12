@@ -33,6 +33,8 @@ class GCTApp(App):
         Binding("w", "switch_view('week')", "Week", show=True),
         Binding("d", "switch_view('day')", "Day", show=True),
         Binding("r", "refresh", "Refresh", show=True),
+        Binding("b", "navigate(-1)", "Prev", show=True),
+        Binding("n", "navigate(1)", "Next", show=True),
     ]
 
     def __init__(self):
@@ -45,6 +47,7 @@ class GCTApp(App):
         self.config = self.config_manager.load_config()
         self.weather_cache = {} # 日付(isoformat) -> hourly_data
         self.selected_date = date.today()
+        self.view_date = date.today() # 表示基準日
         self.all_events = [] # 取得済みの全予定
 
     async def on_mount(self) -> None:
@@ -80,12 +83,17 @@ class GCTApp(App):
         except Exception as e:
             self.notify(f"Auth Error: {str(e)}", severity="error")
 
-    async def refresh_data(self) -> None:
+    async def refresh_data(self, target_date: date = None) -> None:
         """データの取得と画面反映"""
         if not self.creds or not self.calendar_api: return
+        
+        if target_date:
+            self.view_date = target_date
+        else:
+            target_date = self.view_date
 
         try:
-            # 1. 天気取得
+            # 1. 天気取得 (現在の選択日または基準日の天気)
             lat = self.config["weather"]["latitude"]
             lon = self.config["weather"]["longitude"]
             weather_data = await self.weather_api.get_weather(lat, lon)
@@ -100,10 +108,9 @@ class GCTApp(App):
                 cal_text += f"{indicator}{cal['summary']}\n"
             cal_list_label.update(cal_text)
 
-            # 3. カレンダー予定取得 (前後1ヶ月分取得)
-            now = datetime.now()
-            start_fetch = (now - timedelta(days=32)).replace(hour=0, minute=0, second=0, microsecond=0)
-            end_fetch = (now + timedelta(days=60)).replace(hour=0, minute=0, second=0, microsecond=0)
+            # 3. カレンダー予定取得 (基準日の前後3ヶ月分くらい広めに取得)
+            start_fetch = datetime.combine(target_date, datetime.min.time()) - timedelta(days=45)
+            end_fetch = datetime.combine(target_date, datetime.min.time()) + timedelta(days=90)
             
             self.all_events = await asyncio.to_thread(
                 self.calendar_api.get_events,
@@ -111,48 +118,53 @@ class GCTApp(App):
                 time_max=end_fetch.isoformat() + 'Z'
             )
             
-            # 4. サイドバーの「Upcoming」更新
+            # 4. サイドバーの「Upcoming」更新 (ここは常に「今日」基準)
             upcoming = self.query_one("#sidebar-upcoming", Label)
             if self.all_events:
-                now_utc = datetime.now() # 簡易的に現在時刻と比較
+                now_sys = datetime.now()
                 upcoming_list = []
-                for ev in self.all_events:
+                # 未来の予定を抽出
+                future_events = [ev for ev in self.all_events if datetime.fromisoformat(ev['start'].get('dateTime', ev['start'].get('date')).replace('Z', '+00:00')).replace(tzinfo=None) >= now_sys]
+                for ev in future_events[:3]:
                     start_str = ev['start'].get('dateTime', ev['start'].get('date'))
-                    # タイムゾーンを考慮した比較のための変換 (簡易版)
                     dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
-                    # dt が現在(tzなし)に近くなるよう tzinfo を消去して比較
-                    if dt.replace(tzinfo=None) >= now_utc:
-                        time_part = dt.strftime('%H:%M') if 'T' in start_str else "AllDay"
-                        upcoming_list.append(f"[bold]{dt.strftime('%m/%d')} {time_part}[/bold] {ev['summary']}")
-                    if len(upcoming_list) >= 3:
-                        break
+                    time_part = dt.strftime('%H:%M') if 'T' in start_str else "AllDay"
+                    upcoming_list.append(f"[bold]{dt.strftime('%m/%d')} {time_part}[/bold] {ev['summary']}")
                 
                 upcoming.update("\n".join(upcoming_list) if upcoming_list else "No future events")
             else:
                 upcoming.update("No upcoming events")
 
-            # 5. 月間表示用に分類 (今月分)
+            # 5. 月間表示用に分類 (基準日の月分)
             events_by_day = {}
             for event in self.all_events:
                 start = event['start'].get('dateTime', event['start'].get('date'))
                 dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                if dt.year == now.year and dt.month == now.month:
+                if dt.year == target_date.year and dt.month == target_date.month:
                     events_by_day.setdefault(dt.day, []).append(event)
             
             # 6. ウィジェット更新
+            # Month Widget の再構築 (年月が変わる可能性があるため)
+            view_switcher = self.query_one("#view-switcher", ContentSwitcher)
+            # 現在が月表示なら、CalendarWidget を作り直すか中身を入れ替える
+            # 今回は CalendarWidget に update_calendar メソッドを追加して再描画を避けるのがスマート
             calendar_widget = self.query_one(CalendarWidget)
-            await calendar_widget.update_events(events_by_day)
+            if calendar_widget.year != target_date.year or calendar_widget.month != target_date.month:
+                # 年月が変わる場合は recompose 的な処理が必要だが、CalendarWidget 側で対応させる
+                await calendar_widget.update_calendar(target_date.year, target_date.month, events_by_day)
+            else:
+                await calendar_widget.update_events(events_by_day)
             
             # 週・日ビューも同期更新
-            self.sync_sub_views(self.selected_date)
+            self.sync_sub_views(target_date)
             
             header_info = self.query_one("#header-info", Label)
-            header_info.update(f"{now.strftime('%B %Y')}")
+            header_info.update(f"{target_date.strftime('%B %Y')}")
             
-            # 7. 今日または選択日にフォーカス
+            # 選択日にフォーカス
             days = calendar_widget.query(CalendarDay)
             for day_widget in days:
-                if day_widget.date_obj == self.selected_date:
+                if day_widget.date_obj == target_date:
                     day_widget.focus()
                     break
             
@@ -233,6 +245,43 @@ class GCTApp(App):
             target_btn.add_class("-active")
         except Exception: pass
         self.notify(f"Switched to {view} view")
+        # 表示中の日付に基づいて再描画をかける
+        self.run_worker(self.refresh_data(self.view_date))
+
+    async def action_navigate(self, direction: str) -> None:
+        """表示期間を前後させる (b/n キー)"""
+        try:
+            dir_val = int(direction)
+        except ValueError:
+            return
+
+        switcher = self.query_one("#view-switcher", ContentSwitcher)
+        current_view = switcher.current
+        
+        new_date = self.view_date
+        if current_view == "view-month":
+            # 1ヶ月前後 (安全な年月計算)
+            y, m = new_date.year, new_date.month
+            if dir_val > 0:
+                y = y + (m // 12)
+                m = (m % 12) + 1
+            else:
+                y = y - (1 if m == 1 else 0)
+                m = 12 if m == 1 else m - 1
+            new_date = date(y, m, 1)
+        elif current_view == "view-week":
+            # 1週間前後
+            new_date += timedelta(weeks=dir_val)
+        elif current_view == "view-day":
+            # 1日前後
+            new_date += timedelta(days=dir_val)
+            
+        self.selected_date = new_date
+        await self.refresh_data(new_date)
+        
+        # 動作確認用の通知
+        view_name = current_view.split("-")[1].capitalize()
+        self.notify(f"Navigated {view_name}: {new_date.strftime('%Y-%m-%d')}")
 
 class GCTCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
