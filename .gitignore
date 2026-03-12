@@ -1,3 +1,7 @@
 .venv
 .env
 __pycache__
+
+implementation_plan.md
+task.md
+test_widget.py

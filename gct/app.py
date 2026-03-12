@@ -4,7 +4,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.binding import Binding
 from textual.command import Provider, Hit, Hits
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import asyncio
 
 from .utils.auth import AuthManager
@@ -44,6 +44,8 @@ class GCTApp(App):
         self.creds = None
         self.config = self.config_manager.load_config()
         self.weather_cache = {} # 日付(isoformat) -> hourly_data
+        self.selected_date = date.today()
+        self.all_events = [] # 取得済みの全予定
 
     async def on_mount(self) -> None:
         """起動時の処理"""
@@ -65,12 +67,9 @@ class GCTApp(App):
     async def authenticate(self) -> None:
         """Google API 認証の実行 (非ブロッキング)"""
         try:
-            # 認証プロセスからのログを通知として表示するコールバック
             def log_auth(msg):
                 self.notify(msg)
 
-            # 認証処理はブラウザの起動を伴うため、別スレッドで実行
-            # self.run_in_thread の代わりに asyncio.to_thread を使用
             self.creds = await asyncio.to_thread(
                 self.auth_manager.get_credentials, 
                 log_callback=log_auth
@@ -93,31 +92,30 @@ class GCTApp(App):
             self.query_one(WeatherWidget).update_weather(weather_data["current_weather"])
             
             # 2. カレンダー一覧の取得とサイドバー更新
-            # asyncio.to_thread を使用してブロッキングを回避
             calendars = await asyncio.to_thread(self.calendar_api.get_calendar_list)
             cal_list_label = self.query_one("#calendar-list", Label)
             cal_text = ""
-            for cal in calendars[:5]: # 上位5件
+            for cal in calendars[:5]:
                 indicator = "● " if cal.get('selected') else "○ "
                 cal_text += f"{indicator}{cal['summary']}\n"
             cal_list_label.update(cal_text)
 
-            # 3. カレンダー予定取得 (今月の全予定)
+            # 3. カレンダー予定取得 (前後1ヶ月分取得)
             now = datetime.now()
-            first_day = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            last_day = (first_day + timedelta(days=32)).replace(day=1)
+            start_fetch = (now - timedelta(days=32)).replace(hour=0, minute=0, second=0, microsecond=0)
+            end_fetch = (now + timedelta(days=60)).replace(hour=0, minute=0, second=0, microsecond=0)
             
-            events = await asyncio.to_thread(
+            self.all_events = await asyncio.to_thread(
                 self.calendar_api.get_events,
-                time_min=first_day.isoformat() + 'Z',
-                time_max=last_day.isoformat() + 'Z'
+                time_min=start_fetch.isoformat() + 'Z',
+                time_max=end_fetch.isoformat() + 'Z'
             )
             
             # 4. サイドバーの「Upcoming」更新
             upcoming = self.query_one("#sidebar-upcoming", Label)
-            if events:
+            if self.all_events:
                 upcoming_text = ""
-                for ev in events[:3]: # 直近3件
+                for ev in self.all_events[:3]:
                     start = ev['start'].get('dateTime', ev['start'].get('date'))
                     dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
                     upcoming_text += f"[bold]{dt.strftime('%m/%d')}[/bold] {ev['summary']}\n"
@@ -125,26 +123,28 @@ class GCTApp(App):
             else:
                 upcoming.update("No upcoming events")
 
-            # 5. 日付ごとに分類
+            # 5. 月間表示用に分類 (今月分)
             events_by_day = {}
-            for event in events:
+            for event in self.all_events:
                 start = event['start'].get('dateTime', event['start'].get('date'))
                 dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                if dt.month == now.month:
+                if dt.year == now.year and dt.month == now.month:
                     events_by_day.setdefault(dt.day, []).append(event)
             
             # 6. ウィジェット更新
             calendar_widget = self.query_one(CalendarWidget)
             await calendar_widget.update_events(events_by_day)
             
-            # 月名の更新
+            # 週・日ビューも同期更新
+            self.sync_sub_views(self.selected_date)
+            
             header_info = self.query_one("#header-info", Label)
             header_info.update(f"{now.strftime('%B %Y')}")
             
-            # 7. 今日の日付にフォーカスを当てる
+            # 7. 今日または選択日にフォーカス
             days = calendar_widget.query(CalendarDay)
             for day_widget in days:
-                if day_widget.is_today:
+                if day_widget.date_obj == self.selected_date:
                     day_widget.focus()
                     break
             
@@ -152,7 +152,6 @@ class GCTApp(App):
             self.notify(f"Refresh Error: {str(e)}", severity="error")
 
     async def on_button_pressed(self, event: Button.Pressed) -> None:
-        """ボタン押下時のイベントハンドラ"""
         btn_id = event.button.id
         if btn_id == "btn-month":
             self.action_switch_view("month")
@@ -162,70 +161,74 @@ class GCTApp(App):
             self.action_switch_view("day")
 
     async def on_calendar_widget_day_selected(self, message: CalendarWidget.DaySelected) -> None:
-        """カレンダーの日付が選択された時の処理 (ワーカーで実行してレスポンス改善)"""
         self.run_worker(self.handle_day_selection(message), exclusive=True, group="selection_update")
 
     async def handle_day_selection(self, message: CalendarWidget.DaySelected) -> None:
-        """実際の選択処理 (デバウンス目的でわずかに待機)"""
-        await asyncio.sleep(0.05) # 高速移動時はキャンセルされる
+        await asyncio.sleep(0.05)
+        if not message.date_obj: return
+        
+        self.selected_date = message.date_obj
+        self.sync_sub_views(self.selected_date)
 
-        # 1. 天気詳細の更新 (1h予報)
-        if message.date_obj:
-            date_key = message.date_obj.isoformat()
-            if date_key in self.weather_cache:
-                self.query_one(WeatherWidget).update_hourly(self.weather_cache[date_key])
-                return
+        date_key = self.selected_date.isoformat()
+        if date_key in self.weather_cache:
+            self.query_one(WeatherWidget).update_hourly(self.weather_cache[date_key])
+            return
 
-            try:
-                lat = self.config["weather"]["latitude"]
-                lon = self.config["weather"]["longitude"]
-                hourly_data = await self.weather_api.get_hourly_weather(lat, lon, date_key)
-                self.weather_cache[date_key] = hourly_data
-                self.query_one(WeatherWidget).update_hourly(hourly_data)
-            except Exception as e:
-                self.log(f"Weather error: {e}")
+        try:
+            lat = self.config["weather"]["latitude"]
+            lon = self.config["weather"]["longitude"]
+            hourly_data = await self.weather_api.get_hourly_weather(lat, lon, date_key)
+            self.weather_cache[date_key] = hourly_data
+            self.query_one(WeatherWidget).update_hourly(hourly_data)
+        except Exception as e:
+            self.log(f"Weather error: {e}")
+
+    def sync_sub_views(self, target_date: date) -> None:
+        """週・日ビューの表示内容を同期"""
+        events_by_day = {}
+        day_events = []
+        for ev in self.all_events:
+            start = ev['start'].get('dateTime', ev['start'].get('date'))
+            dt = datetime.fromisoformat(start.replace('Z', '+00:00')).date()
+            events_by_day.setdefault(dt.isoformat(), []).append(ev)
+            if dt == target_date:
+                day_events.append(ev)
+        
+        try:
+            self.query_one(WeekWidget).update_view(target_date, events_by_day)
+            self.query_one(DayWidget).update_view(target_date, day_events)
+        except Exception:
+            pass # まだ構築されていない場合はスキップ
 
     def compose(self) -> ComposeResult:
         now = datetime.now()
         yield Header()
         with Horizontal(id="app-body"):
             yield Sidebar(id="sidebar")
-
             with Vertical(id="main-content"):
                 yield Label(f"{now.strftime('%B %Y')}", id="header-info")
-                
-                # ビューの切り替え用 (メイン)
                 with ContentSwitcher(initial="view-month", id="view-switcher"):
                     yield CalendarWidget(now.year, now.month, id="view-month")
                     yield WeekWidget(id="view-week")
                     yield DayWidget(id="view-day")
-
         yield Footer()
 
     def action_switch_view(self, view: str) -> None:
-        """ビューの切り替え表示"""
         switcher = self.query_one("#view-switcher", ContentSwitcher)
         switcher.current = f"view-{view}"
-
-        # ボタンのスタイル更新
+        
         for btn in self.query("#sidebar Button"):
             btn.remove_class("-active")
-        
         try:
             target_btn = self.query_one(f"#btn-{view}", Button)
             target_btn.add_class("-active")
-        except Exception:
-            pass
-        
+        except Exception: pass
         self.notify(f"Switched to {view} view")
 
 class GCTCommandProvider(Provider):
-    """GCT独自のコマンドパレットプロバイダー"""
-    
     async def search(self, query: str) -> Hits:
-        """コマンドを検索"""
         matcher = self.matcher(query)
-        
         commands = [
             ("Exit / Quit App", self.app.action_quit, "Exit the application"),
             ("Switch to Month View", lambda: self.app.action_switch_view("month"), "Show monthly calendar"),
@@ -233,18 +236,11 @@ class GCTCommandProvider(Provider):
             ("Switch to Day View", lambda: self.app.action_switch_view("day"), "Show daily schedule"),
             ("Refresh Data", self.app.refresh_data, "Fetch latest events and weather"),
         ]
-        
         for name, action, help_text in commands:
             score = matcher.match(name)
             if score > 0:
-                yield Hit(
-                    score,
-                    matcher.highlight(name),
-                    action,
-                    help=help_text
-                )
+                yield Hit(score, matcher.highlight(name), action, help=help_text)
 
-# App クラスの COMMANDS を更新
 GCTApp.COMMANDS = GCTApp.COMMANDS | {GCTCommandProvider}
 
 if __name__ == "__main__":

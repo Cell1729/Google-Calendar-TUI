@@ -18,6 +18,8 @@ class CalendarDay(Static):
         self.date_obj = date_obj
 
     def compose(self) -> ComposeResult:
+        if self.is_today:
+            self.add_class("today")
         # プレースホルダを作成
         yield Label(str(self.day) if self.day > 0 else "", id="day-num")
         yield Label("", id="cell-event-list")
