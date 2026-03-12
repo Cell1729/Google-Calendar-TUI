@@ -17,6 +17,7 @@ from .widgets.week_view import WeekWidget
 from .widgets.day_view import DayWidget
 from .widgets.event_form import EventFormScreen
 from .widgets.confirm_delete import ConfirmDeleteScreen
+from .widgets.import_screen import ImportScreen
 from .widgets.event_item import EventItem
 from .api.calendar import CalendarAPI
 from .api.weather import WeatherAPI
@@ -39,6 +40,7 @@ class GCTApp(App):
         Binding("b", "navigate(-1)", "Prev", show=True),
         Binding("n", "navigate(1)", "Next", show=True),
         Binding("a", "add_event", "Add Event", show=True),
+        Binding("i", "import_events", "Import JSON", show=True),
         Binding("j", "focus_next_item", "Next Item", show=False),
         Binding("k", "focus_prev_item", "Prev Item", show=False),
     ]
@@ -333,6 +335,71 @@ class GCTApp(App):
             EventFormScreen(target_date=self.selected_date, event_data=event_data),
             self._handle_event_form_result
         )
+
+    async def action_import_events(self) -> None:
+        """JSONインポート画面を開く"""
+        self.push_screen(ImportScreen(), self._handle_import_result)
+
+    async def _handle_import_result(self, file_path: str) -> None:
+        """インポート画面からのパスを受け取りタスク開始"""
+        if not file_path: return
+        self.notify(f"Importing from {file_path}...")
+        self.run_worker(self._import_task(file_path))
+
+    async def _import_task(self, file_path: str) -> None:
+        import json
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                
+            if not isinstance(data, list):
+                self.notify("Error: JSON must be a list of events.", severity="error")
+                return
+                
+            imported_count = 0
+            for item in data:
+                summary = item.get("summary", "Imported Event")
+                is_all_day = False
+                start_dt = None
+                end_dt = None
+                
+                # ユーザー指定フォーマット対応
+                if "date" in item and "start_time" in item and "end_time" in item:
+                    start_dt = datetime.strptime(f"{item['date']} {item['start_time']}", "%Y-%m-%d %H:%M")
+                    end_dt = datetime.strptime(f"{item['date']} {item['end_time']}", "%Y-%m-%d %H:%M")
+                
+                # 終日予定フォーマット
+                elif "date" in item:
+                    start_dt = datetime.strptime(item["date"], "%Y-%m-%d")
+                    end_dt = start_dt
+                    is_all_day = True
+                
+                # 汎用/標準フォーマット
+                elif "start" in item and "end" in item:
+                    is_all_day = item.get("is_all_day", False)
+                    f_str = "%Y-%m-%d" if is_all_day else "%Y-%m-%d %H:%M"
+                    # 余分な T 等を整形
+                    s_str = item["start"].replace("T", " ")[:16]
+                    e_str = item["end"].replace("T", " ")[:16]
+                    start_dt = datetime.strptime(s_str[:10] if is_all_day else s_str, f_str)
+                    end_dt = datetime.strptime(e_str[:10] if is_all_day else e_str, f_str)
+                
+                if start_dt and end_dt:
+                    await asyncio.to_thread(
+                        self.calendar_api.create_event,
+                        calendar_id="primary",
+                        summary=summary,
+                        start_time=start_dt,
+                        end_time=end_dt,
+                        is_all_day=is_all_day
+                    )
+                    imported_count += 1
+                    
+            self.notify(f"Successfully imported {imported_count} events.", severity="information")
+            self.run_worker(self.refresh_data(self.view_date, fetch_api=True))
+            
+        except Exception as e:
+            self.notify(f"Import Error: {str(e)}", severity="error")
 
     async def _handle_event_form_result(self, result: dict) -> None:
         """フォームでの入力結果を受け取り、APIと通信する"""
