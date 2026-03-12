@@ -2,6 +2,7 @@ from textual.app import ComposeResult
 from textual.widgets import Static, Label
 from textual.containers import Vertical, Horizontal, Container
 from datetime import datetime, timedelta, date
+from .event_item import EventItem
 
 class WeekDay(Vertical):
     """週間表示内の1日分カラム"""
@@ -16,14 +17,19 @@ class WeekDay(Vertical):
         day_str = f"{self.date_obj.day} ({day_name})"
         
         yield Label(day_str, classes="week-day-header" + (" today" if is_today else ""))
-        yield Label("", id="week-cell-events")
-        self.call_after_refresh(self.update_content)
+        yield Vertical(id="week-cell-events")
+        # 非同期になったため、初期化時は親から update_view 経由で呼ばれるのを待つか、
+        # あるいは GCTApp 側での描画時に処理される
 
-    def update_content(self) -> None:
+    async def update_content(self) -> None:
         """予定のリストを更新"""
-        list_widget = self.query_one("#week-cell-events", Label)
+        list_widget = self.query_one("#week-cell-events", Vertical)
+        
+        # 既存のイベント要素をクリア
+        for child in list(list_widget.children):
+            await child.remove()
+            
         if self.events:
-            event_titles = []
             # 週間表示は縦長なので少し多めに表示
             for ev in self.events[:8]:
                 summary = ev.get('summary', '(No Title)')
@@ -33,11 +39,9 @@ class WeekDay(Vertical):
                 # 文字数制限
                 if len(summary) > 12:
                     summary = summary[:11] + "…"
-                event_titles.append(f"{time_str} {summary}")
-            
-            list_widget.update("\n".join(event_titles))
-        else:
-            list_widget.update("")
+                    
+                item = EventItem(f"{time_str} {summary}", event_data=ev)
+                await list_widget.mount(item)
 
 class WeekWidget(Vertical):
     """週間表示ウィジェット (日曜開始)"""
@@ -60,7 +64,7 @@ class WeekWidget(Vertical):
                 events = self.events_by_day.get(date_str, [])
                 yield WeekDay(day_date, events=events, classes="week-col")
 
-    def update_view(self, target_date: date, events_by_day: dict):
+    async def update_view(self, target_date: date, events_by_day: dict):
         """外部からデータを流し込んで更新"""
         self.current_date = target_date
         self.events_by_day = events_by_day
@@ -81,7 +85,7 @@ class WeekWidget(Vertical):
                 # re-update header
                 header = col.query_one(".week-day-header", Label)
                 header.update(f"{day_date.day} ({day_date.strftime('%a')})")
-                col.update_content()
+                await col.update_content()
         else:
             # 万が一構成が違ったら再構築
             self.recompose()

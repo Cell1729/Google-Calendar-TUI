@@ -27,25 +27,44 @@ class CalendarAPI:
         
         return events_result.get('items', [])
 
-    def create_event(self, calendar_id, summary, start_time, end_time, description=None):
+    def create_event(self, calendar_id, summary, start_time, end_time, description=None, is_all_day=False):
         """新しい予定を作成"""
         event = {
             'summary': summary,
-            'description': description,
-            'start': {
+            'description': description or '',
+        }
+        
+        if is_all_day:
+            event['start'] = {'date': start_time.strftime('%Y-%m-%d')}
+            event['end'] = {'date': end_time.strftime('%Y-%m-%d')}
+        else:
+            event['start'] = {
                 'dateTime': start_time.isoformat(),
                 'timeZone': 'UTC',
-            },
-            'end': {
+            }
+            event['end'] = {
                 'dateTime': end_time.isoformat(),
                 'timeZone': 'UTC',
-            },
-        }
+            }
+
         return self.service.events().insert(calendarId=calendar_id, body=event).execute()
 
     def update_event(self, calendar_id, event_id, **kwargs):
         """既存の予定を更新"""
         event = self.service.events().get(calendarId=calendar_id, eventId=event_id).execute()
+        
+        # タイムゾーン等の入れ子構造を安全に更新するための特別処理
+        if 'start' in kwargs:
+            event['start'] = kwargs['start']
+        if 'end' in kwargs:
+            event['end'] = kwargs['end']
+        
         for key, value in kwargs.items():
-            event[key] = value
+            if key not in ('start', 'end'):
+                event[key] = value
+                
         return self.service.events().update(calendarId=calendar_id, eventId=event_id, body=event).execute()
+
+    def delete_event(self, calendar_id, event_id):
+        """予定を削除"""
+        return self.service.events().delete(calendarId=calendar_id, eventId=event_id).execute()

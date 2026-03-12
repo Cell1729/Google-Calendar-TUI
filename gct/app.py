@@ -15,6 +15,9 @@ from .widgets.sidebar import Sidebar
 from .widgets.weather import WeatherWidget
 from .widgets.week_view import WeekWidget
 from .widgets.day_view import DayWidget
+from .widgets.event_form import EventFormScreen
+from .widgets.confirm_delete import ConfirmDeleteScreen
+from .widgets.event_item import EventItem
 from .api.calendar import CalendarAPI
 from .api.weather import WeatherAPI
 
@@ -35,6 +38,7 @@ class GCTApp(App):
         Binding("r", "refresh", "Refresh", show=True),
         Binding("b", "navigate(-1)", "Prev", show=True),
         Binding("n", "navigate(1)", "Next", show=True),
+        Binding("a", "add_event", "Add Event", show=True),
     ]
 
     def __init__(self):
@@ -49,6 +53,7 @@ class GCTApp(App):
         self.selected_date = date.today()
         self.view_date = date.today() # 表示基準日
         self.all_events = [] # 取得済みの全予定
+        self.fetched_range = None # APIによる取得済みのデータ範囲 (start_date, end_date)
 
     async def on_mount(self) -> None:
         """起動時の処理"""
@@ -83,7 +88,7 @@ class GCTApp(App):
         except Exception as e:
             self.notify(f"Auth Error: {str(e)}", severity="error")
 
-    async def refresh_data(self, target_date: date = None) -> None:
+    async def refresh_data(self, target_date: date = None, fetch_api: bool = True) -> None:
         """データの取得と画面反映"""
         if not self.creds or not self.calendar_api: return
         
@@ -92,32 +97,56 @@ class GCTApp(App):
         else:
             target_date = self.view_date
 
-        try:
-            # 1. 天気取得 (現在の選択日または基準日の天気)
-            lat = self.config["weather"]["latitude"]
-            lon = self.config["weather"]["longitude"]
-            weather_data = await self.weather_api.get_weather(lat, lon)
-            self.query_one(WeatherWidget).update_weather(weather_data["current_weather"])
-            
-            # 2. カレンダー一覧の取得とサイドバー更新
-            calendars = await asyncio.to_thread(self.calendar_api.get_calendar_list)
-            cal_list_label = self.query_one("#calendar-list", Label)
-            cal_text = ""
-            for cal in calendars[:5]:
-                indicator = "● " if cal.get('selected') else "○ "
-                cal_text += f"{indicator}{cal['summary']}\n"
-            cal_list_label.update(cal_text)
+        # キャッシュの範囲チェック
+        need_fetch = fetch_api
+        if not need_fetch and self.fetched_range:
+            min_d, max_d = self.fetched_range
+            # 表示期間が取得済み範囲の端に近づいた場合は裏で再フェッチ
+            if target_date < min_d + timedelta(days=15) or target_date > max_d - timedelta(days=15):
+                need_fetch = True
+        elif not self.fetched_range:
+            need_fetch = True
 
-            # 3. カレンダー予定取得 (基準日の前後3ヶ月分くらい広めに取得)
-            start_fetch = datetime.combine(target_date, datetime.min.time()) - timedelta(days=45)
-            end_fetch = datetime.combine(target_date, datetime.min.time()) + timedelta(days=90)
-            
-            self.all_events = await asyncio.to_thread(
-                self.calendar_api.get_events,
-                time_min=start_fetch.isoformat() + 'Z',
-                time_max=end_fetch.isoformat() + 'Z'
-            )
-            
+        try:
+            if need_fetch:
+                lat = self.config["weather"]["latitude"]
+                lon = self.config["weather"]["longitude"]
+                
+                # 取得範囲を長めに設定 (前後3ヶ月〜半年) してキャッシュヒット率を上げる
+                start_fetch = datetime.combine(target_date, datetime.min.time()) - timedelta(days=90)
+                end_fetch = datetime.combine(target_date, datetime.min.time()) + timedelta(days=180)
+
+                # 1〜3 を並行フェッチして超高速化しつつ、Google API のスレッド競合(SSLエラー)を回避
+                weather_task = self.weather_api.get_weather(lat, lon)
+                
+                def fetch_calendar_data():
+                    """Google APIはスレッドセーフではないため、1つのスレッドで直列に処理する"""
+                    cals = self.calendar_api.get_calendar_list()
+                    evs = self.calendar_api.get_events(
+                        time_min=start_fetch.isoformat() + 'Z',
+                        time_max=end_fetch.isoformat() + 'Z'
+                    )
+                    return cals, evs
+                    
+                cal_data_task = asyncio.to_thread(fetch_calendar_data)
+                
+                weather_data, (calendars, self.all_events) = await asyncio.gather(
+                    weather_task, cal_data_task
+                )
+                
+                # 取得した範囲を記録
+                self.fetched_range = (start_fetch.date(), end_fetch.date())
+                
+                # 取得結果のUI反映
+                self.query_one(WeatherWidget).update_weather(weather_data["current_weather"])
+                
+                cal_list_label = self.query_one("#calendar-list", Label)
+                cal_text = ""
+                for cal in calendars[:5]:
+                    indicator = "● " if cal.get('selected') else "○ "
+                    cal_text += f"{indicator}{cal['summary']}\n"
+                cal_list_label.update(cal_text)
+
             # 4. サイドバーの「Upcoming」更新 (ここは常に「今日」基準)
             upcoming = self.query_one("#sidebar-upcoming", Label)
             if self.all_events:
@@ -156,7 +185,7 @@ class GCTApp(App):
                 await calendar_widget.update_events(events_by_day)
             
             # 週・日ビューも同期更新
-            self.sync_sub_views(target_date)
+            await self.sync_sub_views(target_date)
             
             header_info = self.query_one("#header-info", Label)
             header_info.update(f"{target_date.strftime('%B %Y')}")
@@ -180,6 +209,11 @@ class GCTApp(App):
         elif btn_id == "btn-day":
             self.action_switch_view("day")
 
+    async def on_event_item_edit_requested(self, message: EventItem.EditRequested) -> None:
+        """EventItemから編集リクエストが来たときの処理"""
+        # EventItemから送信されたイベントデータを使ってEdit画面を開く
+        await self.edit_event(message.event_data)
+
     async def on_calendar_widget_day_selected(self, message: CalendarWidget.DaySelected) -> None:
         self.run_worker(self.handle_day_selection(message), exclusive=True, group="selection_update")
 
@@ -188,7 +222,7 @@ class GCTApp(App):
         if not message.date_obj: return
         
         self.selected_date = message.date_obj
-        self.sync_sub_views(self.selected_date)
+        await self.sync_sub_views(self.selected_date)
 
         date_key = self.selected_date.isoformat()
         if date_key in self.weather_cache:
@@ -204,7 +238,7 @@ class GCTApp(App):
         except Exception as e:
             self.log(f"Weather error: {e}")
 
-    def sync_sub_views(self, target_date: date) -> None:
+    async def sync_sub_views(self, target_date: date) -> None:
         """週・日ビューの表示内容を同期"""
         events_by_day = {}
         day_events = []
@@ -216,8 +250,8 @@ class GCTApp(App):
                 day_events.append(ev)
         
         try:
-            self.query_one(WeekWidget).update_view(target_date, events_by_day)
-            self.query_one(DayWidget).update_view(target_date, day_events)
+            await self.query_one(WeekWidget).update_view(target_date, events_by_day)
+            await self.query_one(DayWidget).update_view(target_date, day_events)
         except Exception:
             pass # まだ構築されていない場合はスキップ
 
@@ -245,8 +279,8 @@ class GCTApp(App):
             target_btn.add_class("-active")
         except Exception: pass
         self.notify(f"Switched to {view} view")
-        # 表示中の日付に基づいて再描画をかける
-        self.run_worker(self.refresh_data(self.view_date))
+        # 表示中の日付に基づいて再描画をかける (API通信はスキップ)
+        self.run_worker(self.refresh_data(self.view_date, fetch_api=False))
 
     async def action_navigate(self, direction: str) -> None:
         """表示期間を前後させる (b/n キー)"""
@@ -277,11 +311,95 @@ class GCTApp(App):
             new_date += timedelta(days=dir_val)
             
         self.selected_date = new_date
-        await self.refresh_data(new_date)
+        # 画面の移動だけなので API通信はスキップ (データ不足時のみ自動取得)
+        await self.refresh_data(new_date, fetch_api=False)
         
         # 動作確認用の通知
         view_name = current_view.split("-")[1].capitalize()
         self.notify(f"Navigated {view_name}: {new_date.strftime('%Y-%m-%d')}")
+
+    async def action_add_event(self) -> None:
+        """新規予定追加画面を開く"""
+        self.push_screen(
+            EventFormScreen(target_date=self.selected_date),
+            self._handle_event_form_result
+        )
+
+    async def edit_event(self, event_data: dict) -> None:
+        """既存の予定の編集画面を開く"""
+        self.push_screen(
+            EventFormScreen(target_date=self.selected_date, event_data=event_data),
+            self._handle_event_form_result
+        )
+
+    async def _handle_event_form_result(self, result: dict) -> None:
+        """フォームでの入力結果を受け取り、APIと通信する"""
+        if not result:
+            return # キャンセル時
+        
+        self.notify("Syncing with Google Calendar...")
+        
+        try:
+            # 実際のAPIコールは同期的なため、スレッドに投げる
+            if result["action"] == "create":
+                await asyncio.to_thread(
+                    self.calendar_api.create_event,
+                    calendar_id="primary",
+                    summary=result["summary"],
+                    start_time=result["start"],
+                    end_time=result["end"],
+                    is_all_day=result["is_all_day"]
+                )
+                self.notify(f"Created event: {result['summary']}", severity="information")
+                
+            elif result["action"] == "update":
+                update_params = {
+                    "summary": result["summary"]
+                }
+                
+                # 日時情報の組み上げ
+                if result["is_all_day"]:
+                    update_params["start"] = {"date": result["start"].strftime("%Y-%m-%d")}
+                    update_params["end"] = {"date": result["end"].strftime("%Y-%m-%d")}
+                else:
+                    update_params["start"] = {"dateTime": result["start"].isoformat(), "timeZone": "UTC"}
+                    update_params["end"] = {"dateTime": result["end"].isoformat(), "timeZone": "UTC"}
+                
+                await asyncio.to_thread(
+                    self.calendar_api.update_event,
+                    calendar_id="primary",
+                    event_id=result["event_id"],
+                    **update_params
+                )
+                self.notify(f"Updated event: {result['summary']}", severity="information")
+                
+            elif result["action"] == "delete":
+                # 削除確認ダイアログ
+                def check_delete(confirmed: bool):
+                    if confirmed:
+                        self.run_worker(self._delete_event_task(result["event_id"]))
+                        
+                self.push_screen(ConfirmDeleteScreen(), check_delete)
+                return
+                
+            # 完了後、表示期間のデータを最新化
+            self.run_worker(self.refresh_data(self.view_date, fetch_api=True))
+            
+        except Exception as e:
+            self.notify(f"API Error: {str(e)}", severity="error")
+
+    async def _delete_event_task(self, event_id: str):
+        """スレッドワーカーとして削除を実行"""
+        try:
+            await asyncio.to_thread(
+                self.calendar_api.delete_event,
+                calendar_id="primary",
+                event_id=event_id
+            )
+            self.notify("Deleted event.", severity="information")
+            self.run_worker(self.refresh_data(self.view_date, fetch_api=True))
+        except Exception as e:
+            self.notify(f"Delete Error: {str(e)}", severity="error")
 
 class GCTCommandProvider(Provider):
     async def search(self, query: str) -> Hits:
