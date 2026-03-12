@@ -18,6 +18,7 @@ from .widgets.day_view import DayWidget
 from .widgets.event_form import EventFormScreen
 from .widgets.confirm_delete import ConfirmDeleteScreen
 from .widgets.import_screen import ImportScreen
+from .widgets.calendar_selection import CalendarSelectionScreen
 from .widgets.event_item import EventItem
 from .api.calendar import CalendarAPI
 from .api.weather import WeatherAPI
@@ -41,6 +42,7 @@ class GCTApp(App):
         Binding("n", "navigate(1)", "Next", show=True),
         Binding("a", "add_event", "Add Event", show=True),
         Binding("i", "import_events", "Import JSON", show=True),
+        Binding("c", "select_calendars", "Calendars", show=True),
         Binding("j", "focus_next_item", "Next Item", show=False),
         Binding("k", "focus_prev_item", "Prev Item", show=False),
     ]
@@ -58,6 +60,11 @@ class GCTApp(App):
         self.view_date = date.today() # 表示基準日
         self.all_events = [] # 取得済みの全予定
         self.fetched_range = None # APIによる取得済みのデータ範囲 (start_date, end_date)
+        
+        # 選択済みのカレンダーIDをConfigから復元（なければprimary）
+        self.active_calendars = self.config.get("active_calendars", ["primary"])
+        self.calendar_list_cache = [] # 全カレンダーのリストをキャッシュ
+
 
     async def on_mount(self) -> None:
         """起動時の処理"""
@@ -127,6 +134,7 @@ class GCTApp(App):
                     """Google APIはスレッドセーフではないため、1つのスレッドで直列に処理する"""
                     cals = self.calendar_api.get_calendar_list()
                     evs = self.calendar_api.get_events(
+                        calendar_ids=self.active_calendars,
                         time_min=start_fetch.isoformat() + 'Z',
                         time_max=end_fetch.isoformat() + 'Z'
                     )
@@ -138,6 +146,7 @@ class GCTApp(App):
                     weather_task, cal_data_task
                 )
                 
+                self.calendar_list_cache = calendars
                 # 取得した範囲を記録
                 self.fetched_range = (start_fetch.date(), end_fetch.date())
                 
@@ -146,9 +155,12 @@ class GCTApp(App):
                 
                 cal_list_label = self.query_one("#calendar-list", Label)
                 cal_text = ""
-                for cal in calendars[:5]:
-                    indicator = "● " if cal.get('selected') else "○ "
-                    cal_text += f"{indicator}{cal['summary']}\n"
+                # サイドバーには自分が選択中のカレンダーの名前を表示する
+                for cal in self.calendar_list_cache:
+                    if cal['id'] in self.active_calendars:
+                        cal_text += f"● {cal.get('summary', 'Unknown')}\n"
+                if not cal_text:
+                    cal_text = "No calendars selected."
                 cal_list_label.update(cal_text)
 
             # 4. サイドバーの「Upcoming」更新 (ここは常に「今日」基準)
@@ -194,12 +206,15 @@ class GCTApp(App):
             header_info = self.query_one("#header-info", Label)
             header_info.update(f"{target_date.strftime('%B %Y')}")
             
-            # 選択日にフォーカス
-            days = calendar_widget.query(CalendarDay)
-            for day_widget in days:
-                if day_widget.date_obj == target_date:
-                    day_widget.focus()
-                    break
+            # 選択日にフォーカスを復元する
+            # ※ target_date は単なる「表示月」としての基準日になることがあるため、
+            # 常に self.selected_date に合致する日を探してフォーカスを当てる
+            if view_switcher.current == "view-month":
+                days = calendar_widget.query(CalendarDay)
+                for day_widget in days:
+                    if day_widget.date_obj == self.selected_date:
+                        day_widget.focus()
+                        break
             
         except Exception as e:
             self.notify(f"Refresh Error: {str(e)}", severity="error")
@@ -283,8 +298,8 @@ class GCTApp(App):
             target_btn.add_class("-active")
         except Exception: pass
         self.notify(f"Switched to {view} view")
-        # 表示中の日付に基づいて再描画をかける (API通信はスキップ)
-        self.run_worker(self.refresh_data(self.view_date, fetch_api=False))
+        # 選択中の日付(selected_date)に基づいて再描画をかける
+        self.run_worker(self.refresh_data(self.selected_date, fetch_api=False))
 
     async def action_navigate(self, direction: str) -> None:
         """表示期間を前後させる (b/n キー)"""
@@ -296,7 +311,8 @@ class GCTApp(App):
         switcher = self.query_one("#view-switcher", ContentSwitcher)
         current_view = switcher.current
         
-        new_date = self.view_date
+        # 選択中の日付を基準に前後の期間へジャンプする
+        new_date = self.selected_date
         if current_view == "view-month":
             # 1ヶ月前後 (安全な年月計算)
             y, m = new_date.year, new_date.month
@@ -306,7 +322,10 @@ class GCTApp(App):
             else:
                 y = y - (1 if m == 1 else 0)
                 m = 12 if m == 1 else m - 1
-            new_date = date(y, m, 1)
+            import calendar
+            max_day = calendar.monthrange(y, m)[1]
+            d = min(new_date.day, max_day)
+            new_date = date(y, m, d)
         elif current_view == "view-week":
             # 1週間前後
             new_date += timedelta(weeks=dir_val)
@@ -315,8 +334,9 @@ class GCTApp(App):
             new_date += timedelta(days=dir_val)
             
         self.selected_date = new_date
+        self.view_date = new_date
         # 画面の移動だけなので API通信はスキップ (データ不足時のみ自動取得)
-        await self.refresh_data(new_date, fetch_api=False)
+        self.run_worker(self.refresh_data(new_date, fetch_api=False))
         
         # 動作確認用の通知
         view_name = current_view.split("-")[1].capitalize()
@@ -339,6 +359,28 @@ class GCTApp(App):
     async def action_import_events(self) -> None:
         """JSONインポート画面を開く"""
         self.push_screen(ImportScreen(), self._handle_import_result)
+
+    async def action_select_calendars(self) -> None:
+        """表示カレンダー選択画面を開く"""
+        if not self.calendar_list_cache:
+            self.notify("Calendar list not loaded yet.", severity="warning")
+            return
+            
+        self.push_screen(
+            CalendarSelectionScreen(self.calendar_list_cache, self.active_calendars),
+            self._handle_calendar_selection_result
+        )
+
+    async def _handle_calendar_selection_result(self, selected_ids: list) -> None:
+        """カレンダー選択結果を受け取り、設定を保存して再フェッチ"""
+        if selected_ids is None: return # キャンセル時
+        
+        self.active_calendars = selected_ids
+        self.config["active_calendars"] = selected_ids
+        self.config_manager.save_config(self.config)
+        
+        self.notify("Updating calendars...")
+        self.run_worker(self.refresh_data(self.view_date, fetch_api=True))
 
     async def _handle_import_result(self, file_path: str) -> None:
         """インポート画面からのパスを受け取りタスク開始"""
@@ -431,8 +473,8 @@ class GCTApp(App):
                     update_params["start"] = {"date": result["start"].strftime("%Y-%m-%d")}
                     update_params["end"] = {"date": result["end"].strftime("%Y-%m-%d")}
                 else:
-                    update_params["start"] = {"dateTime": result["start"].isoformat(), "timeZone": "UTC"}
-                    update_params["end"] = {"dateTime": result["end"].isoformat(), "timeZone": "UTC"}
+                    update_params["start"] = {"dateTime": result["start"].isoformat(), "timeZone": "Asia/Tokyo"}
+                    update_params["end"] = {"dateTime": result["end"].isoformat(), "timeZone": "Asia/Tokyo"}
                 
                 await asyncio.to_thread(
                     self.calendar_api.update_event,
@@ -482,6 +524,13 @@ class GCTApp(App):
     def action_focus_next_item(self) -> None:
         """jキー: 予定やカレンダー間のフォーカス移動 (次へ)"""
         if isinstance(self.focused, Input): return
+        
+        current_view = self.query_one(ContentSwitcher).current
+        if current_view == "view-month":
+            # 月間表示時はカレンダーの j (1週間下へ) の操作をシミュレート
+            self._move_calendar_focus(7)
+            return
+
         items = self._get_focusable_items()
         if not items: return
         if self.focused in items:
@@ -493,6 +542,13 @@ class GCTApp(App):
     def action_focus_prev_item(self) -> None:
         """kキー: 予定やカレンダー間のフォーカス移動 (前へ)"""
         if isinstance(self.focused, Input): return
+        
+        current_view = self.query_one(ContentSwitcher).current
+        if current_view == "view-month":
+            # 月間表示時はカレンダーの k (1週間上へ) の操作をシミュレート
+            self._move_calendar_focus(-7)
+            return
+            
         items = self._get_focusable_items()
         if not items: return
         if self.focused in items:
@@ -500,6 +556,20 @@ class GCTApp(App):
             items[(idx - 1) % len(items)].focus()
         else:
             items[-1].focus()
+
+    def _move_calendar_focus(self, offset: int) -> None:
+        cal = self.query_one(CalendarWidget)
+        days = list(cal.query(CalendarDay))
+        if not days: return
+        curr_idx = -1
+        for i, d in enumerate(days):
+            if d.has_focus:
+                curr_idx = i
+                break
+        if curr_idx == -1: return
+        new_idx = curr_idx + offset
+        if 0 <= new_idx < len(days):
+            days[new_idx].focus()
 
 class GCTCommandProvider(Provider):
     async def search(self, query: str) -> Hits:

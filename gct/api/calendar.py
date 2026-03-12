@@ -12,22 +12,39 @@ class CalendarAPI:
         calendar_list = self.service.calendarList().list().execute()
         return calendar_list.get('items', [])
 
-    def get_events(self, calendar_id='primary', time_min=None, time_max=None):
-        """指定した期間の予定を取得"""
+    def get_events(self, calendar_ids=['primary'], time_min=None, time_max=None):
+        """指定した期間の予定を複数のカレンダーから取得"""
         if not time_min:
             time_min = datetime.utcnow().isoformat() + 'Z'
         
-        events_result = self.service.events().list(
-            calendarId=calendar_id,
-            timeMin=time_min,
-            timeMax=time_max,
-            singleEvents=True,
-            orderBy='startTime'
-        ).execute()
-        
-        return events_result.get('items', [])
+        all_events = []
+        for cal_id in calendar_ids:
+            try:
+                events_result = self.service.events().list(
+                    calendarId=cal_id,
+                    timeMin=time_min,
+                    timeMax=time_max,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ).execute()
+                items = events_result.get('items', [])
+                
+                # どのカレンダーの予定かを識別できるようにプロパティを追加
+                for item in items:
+                    item['calendarId'] = cal_id
+                all_events.extend(items)
+            except Exception as e:
+                # 権限がないカレンダーなどはスキップ
+                print(f"Failed to fetch {cal_id}: {e}")
+                
+        # 取得した全予定を開始時間でソート
+        def get_start_time(ev):
+            start = ev['start'].get('dateTime', ev['start'].get('date'))
+            return start
+            
+        return sorted(all_events, key=get_start_time)
 
-    def create_event(self, calendar_id, summary, start_time, end_time, description=None, is_all_day=False):
+    def create_event(self, calendar_id, summary, start_time, end_time, description=None, is_all_day=False, time_zone='Asia/Tokyo'):
         """新しい予定を作成"""
         event = {
             'summary': summary,
@@ -40,11 +57,11 @@ class CalendarAPI:
         else:
             event['start'] = {
                 'dateTime': start_time.isoformat(),
-                'timeZone': 'UTC',
+                'timeZone': time_zone,
             }
             event['end'] = {
                 'dateTime': end_time.isoformat(),
-                'timeZone': 'UTC',
+                'timeZone': time_zone,
             }
 
         return self.service.events().insert(calendarId=calendar_id, body=event).execute()

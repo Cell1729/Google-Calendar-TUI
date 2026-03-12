@@ -55,6 +55,29 @@ class DayWidget(Vertical):
                 await slot.mount(item)
             else:
                 # 終日予定などは 0時に
-                slot = self.query_one("#hour-0", Vertical)
                 item = EventItem(f"󰄱 All Day: {summary}", event_data=ev)
                 await slot.mount(item)
+
+        # 描画完了後にスクロールとフォーカスを行う
+        self.call_after_refresh(self._focus_and_scroll, target_date)
+
+    def _focus_and_scroll(self, target_date: date) -> None:
+        """予定がある場合はフォーカス、無い場合は適切な時間に画面をスクロールさせる"""
+        try:
+            from textual.widgets import ContentSwitcher
+            switcher = self.app.query_one("#view-switcher", ContentSwitcher)
+            is_active = (switcher.current == "view-day")
+
+            # もし予定があるなら最初の予定にフォーカス（ただしアクティブな時のみ）
+            events = list(self.query(EventItem))
+            if events and is_active:
+                events[0].focus()
+                return
+            
+            # 予定がない、またはアクティブでない場合でもスクロール位置は合わせておく
+            scroll_area = self.query_one("#day-scroll", ScrollableContainer)
+            target_hour = datetime.now().hour if target_date == date.today() else 8
+            target_slot = self.query_one(f"#hour-{target_hour}", Vertical)
+            scroll_area.scroll_to_widget(target_slot, top=True)
+        except Exception:
+            pass

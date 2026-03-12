@@ -89,3 +89,23 @@ class WeekWidget(Vertical):
         else:
             # 万が一構成が違ったら再構築
             self.recompose()
+
+        # 描画完了後に指定日付の予定へフォーカスを試みる
+        self.call_after_refresh(self._focus_target_date, target_date)
+
+    def _focus_target_date(self, target_date: date) -> None:
+        """指定された日付のカラムを探し、予定があれば最初にフォーカスする"""
+        try:
+            from textual.widgets import ContentSwitcher
+            switcher = self.app.query_one("#view-switcher", ContentSwitcher)
+            if switcher.current != "view-week":
+                return
+
+            for col in self.query(WeekDay):
+                if col.date_obj == target_date:
+                    events = list(col.query(EventItem))
+                    if events:
+                        events[0].focus()
+                    break
+        except Exception:
+            pass
